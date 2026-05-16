@@ -1,25 +1,70 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Toaster, toast } from "sonner";
-import type { AiAnalysis, AnalyseApiError, Submission, StoredQuote } from "@/lib/types";
+import type { AnalyseApiError, AnalyseApiSuccess, Submission, StoredQuote, SubmissionsListResponse } from "@/lib/types";
 import { Header } from "@/components/Header";
 import { CustomerView } from "@/components/CustomerView";
 import { PartnerView } from "@/components/PartnerView";
 import { AnalysingOverlay } from "@/components/AnalysingOverlay";
 import { fonts, palette } from "@/components/style";
 
+async function loadSubmissionsFromApi(): Promise<Submission[]> {
+  const res = await fetch("/api/submissions");
+  if (!res.ok) return [];
+  const data = (await res.json()) as SubmissionsListResponse;
+  return data.submissions ?? [];
+}
+
 export function App() {
   const [view, setView] = useState<"customer" | "partner">("customer");
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [partnerSelectedId, setPartnerSelectedId] = useState<string | null>(null);
   const [customerFocusId, setCustomerFocusId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await loadSubmissionsFromApi();
+        if (!cancelled) setSubmissions(list);
+      } catch {
+        if (!cancelled) toast.error("Could not load saved submissions");
+      } finally {
+        if (!cancelled) setHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const showAnalysingOverlay = useMemo(() => {
     if (view !== "partner" || !customerFocusId) return false;
     const s = submissions.find((x) => x.id === customerFocusId);
     return s?.status === "analysing";
   }, [view, customerFocusId, submissions]);
+
+  const persistSubmission = useCallback(async (updated: Submission) => {
+    const res = await fetch(`/api/submissions/${updated.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        partnerNotes: updated.partnerNotes,
+        status: updated.status,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { message?: string };
+      throw new Error(err.message ?? "Failed to save");
+    }
+
+    const data = (await res.json()) as { submission: Submission };
+    setSubmissions((subs) => subs.map((x) => (x.id === data.submission.id ? data.submission : x)));
+    return data.submission;
+  }, []);
 
   const startSubmission = useCallback(
     async (payload: {
@@ -28,7 +73,7 @@ export function App() {
       pdfs: (File | null)[];
     }) => {
       const { project, rows, pdfs } = payload;
-      const id = "sub_" + Math.random().toString(36).slice(2, 12);
+      const tempId = "temp_" + Math.random().toString(36).slice(2, 12);
       const quotesMeta: StoredQuote[] = rows.map((r, i) => ({
         builder: r.builder,
         content: r.text,
@@ -36,7 +81,7 @@ export function App() {
       }));
 
       const newSub: Submission = {
-        id,
+        id: tempId,
         projectDescription: project,
         quotes: quotesMeta,
         status: "analysing",
@@ -46,8 +91,8 @@ export function App() {
       };
 
       setSubmissions((s) => [newSub, ...s]);
-      setPartnerSelectedId(id);
-      setCustomerFocusId(id);
+      setPartnerSelectedId(tempId);
+      setCustomerFocusId(tempId);
       setView("partner");
 
       toast.info("Analysis started", {
@@ -63,18 +108,34 @@ export function App() {
         if (file) formData.append(`quote_${i}_pdf`, file);
       }
 
+      const replaceId = (fromId: string, next: Submission) => {
+        setSubmissions((subs) => subs.map((x) => (x.id === fromId ? next : x)));
+        setPartnerSelectedId((id) => (id === fromId ? next.id : id));
+        setCustomerFocusId((id) => (id === fromId ? next.id : id));
+      };
+
       try {
         const res = await fetch("/api/analyse", { method: "POST", body: formData });
-        const data = (await res.json()) as ({ analysis?: AiAnalysis } & AnalyseApiError) | AnalyseApiError;
+        const data = (await res.json()) as AnalyseApiSuccess & AnalyseApiError;
 
         if (!res.ok) {
-          const err = data as AnalyseApiError;
+          const err = data;
           const msg = err.message || err.error || "Request failed";
-          setSubmissions((subs) =>
-            subs.map((x) =>
-              x.id === id ? { ...x, status: "error", errorCode: err.error, errorMessage: msg } : x,
-            ),
-          );
+          const dbId = err.submissionId;
+
+          if (dbId) {
+            const list = await loadSubmissionsFromApi();
+            const fromDb = list.find((s) => s.id === dbId);
+            if (fromDb) replaceId(tempId, fromDb);
+            else replaceId(tempId, { ...newSub, id: dbId, status: "error", errorCode: err.error, errorMessage: msg });
+          } else {
+            setSubmissions((subs) =>
+              subs.map((x) =>
+                x.id === tempId ? { ...x, status: "error", errorCode: err.error, errorMessage: msg } : x,
+              ),
+            );
+          }
+
           if (res.status === 429 || err.error === "GEMINI_QUOTA") {
             toast.error("Gemini quota / rate limit", { description: msg, duration: 12_000 });
           } else {
@@ -83,11 +144,10 @@ export function App() {
           return;
         }
 
-        const ok = data as { analysis?: AiAnalysis };
-        if (!ok.analysis) {
+        if (!data.analysis || !data.submissionId) {
           setSubmissions((subs) =>
             subs.map((x) =>
-              x.id === id
+              x.id === tempId
                 ? { ...x, status: "error", errorCode: "NO_ANALYSIS", errorMessage: "Empty analysis in response" }
                 : x,
             ),
@@ -96,14 +156,26 @@ export function App() {
           return;
         }
 
-        setSubmissions((subs) =>
-          subs.map((x) => (x.id === id ? { ...x, status: "ready", aiAnalysis: ok.analysis! } : x)),
-        );
+        replaceId(tempId, {
+          id: data.submissionId,
+          projectDescription: project,
+          quotes: quotesMeta,
+          status: "ready",
+          aiAnalysis: data.analysis,
+          partnerNotes: "",
+          createdAt: newSub.createdAt,
+        });
+
+        const list = await loadSubmissionsFromApi();
+        const fromDb = list.find((s) => s.id === data.submissionId);
+        if (fromDb) {
+          setSubmissions((subs) => subs.map((x) => (x.id === data.submissionId ? fromDb : x)));
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Network error";
         setSubmissions((subs) =>
           subs.map((x) =>
-            x.id === id ? { ...x, status: "error", errorCode: "NETWORK", errorMessage: msg } : x,
+            x.id === tempId ? { ...x, status: "error", errorCode: "NETWORK", errorMessage: msg } : x,
           ),
         );
         toast.error("Network error", { description: msg });
@@ -111,6 +183,14 @@ export function App() {
     },
     [],
   );
+
+  if (!hydrated) {
+    return (
+      <div style={{ minHeight: "100vh", background: palette.bg, fontFamily: fonts.body, color: palette.ink }}>
+        <div style={{ padding: 48, textAlign: "center", color: palette.inkFaint, fontSize: 14 }}>Loading submissions…</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", background: palette.bg, fontFamily: fonts.body, color: palette.ink }}>
@@ -135,6 +215,7 @@ export function App() {
           setSubmissions={setSubmissions}
           selectedId={partnerSelectedId}
           setSelectedId={setPartnerSelectedId}
+          onPersistSubmission={persistSubmission}
           onApproved={() => {}}
         />
       )}

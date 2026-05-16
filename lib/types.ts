@@ -45,7 +45,12 @@ export type Submission = {
 };
 
 export type AnalyseApiSuccess = {
+  submissionId: string;
   analysis: AiAnalysis;
+};
+
+export type SubmissionsListResponse = {
+  submissions: Submission[];
 };
 
 export type AnalyseApiError = {
@@ -56,4 +61,6 @@ export type AnalyseApiError = {
   rawSnippet?: string;
   /** When Google returns 429 / quota guidance */
   retryAfterSeconds?: number;
+  /** Set when a DB row was created before the failure */
+  submissionId?: string;
 };

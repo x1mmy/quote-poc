@@ -5,18 +5,21 @@ import type { Submission } from "@/lib/types";
 import { fonts, palette } from "@/components/style";
 import { Pill } from "@/components/Pill";
 import { ReviewPanel } from "@/components/ReviewPanel";
+import { useMediaQuery } from "@/components/useMediaQuery";
 
 export function PartnerView({
   submissions,
   setSubmissions,
   selectedId,
   setSelectedId,
+  onPersistSubmission,
   onApproved,
 }: {
   submissions: Submission[];
   setSubmissions: Dispatch<SetStateAction<Submission[]>>;
   selectedId: string | null;
   setSelectedId: (id: string) => void;
+  onPersistSubmission: (s: Submission) => Promise<Submission>;
   onApproved: () => void;
 }) {
   useEffect(() => {
@@ -27,10 +30,11 @@ export function PartnerView({
   }, [submissions, selectedId, setSelectedId]);
 
   const selected = submissions.find((s) => s.id === selectedId);
+  const narrow = useMediaQuery("(max-width: 767px)");
 
   if (submissions.length === 0) {
     return (
-      <div style={{ maxWidth: 600, margin: "120px auto", textAlign: "center", padding: "0 36px" }}>
+      <div style={{ maxWidth: 600, margin: "120px auto", textAlign: "center", padding: narrow ? "0 20px" : "0 36px" }}>
         <div style={{ fontFamily: fonts.display, fontSize: 28, color: palette.inkSoft, fontStyle: "italic" }}>
           No submissions yet.
         </div>
@@ -42,15 +46,26 @@ export function PartnerView({
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", minHeight: "calc(100vh - 81px)" }}>
+    <div
+      style={{
+        display: narrow ? "flex" : "grid",
+        flexDirection: narrow ? "column" : undefined,
+        gridTemplateColumns: narrow ? undefined : "minmax(260px, 300px) 1fr",
+        minHeight: "calc(100vh - 81px)",
+      }}
+    >
       <aside
         style={{
-          borderRight: `1px solid ${palette.line}`,
+          borderRight: narrow ? "none" : `1px solid ${palette.line}`,
+          borderBottom: narrow ? `1px solid ${palette.line}` : "none",
           background: palette.card,
-          padding: "24px 0",
+          padding: narrow ? "16px 0" : "24px 0",
+          flexShrink: 0,
+          maxHeight: narrow ? "min(38vh, 260px)" : undefined,
+          overflowY: narrow ? "auto" : undefined,
         }}
       >
-        <div style={{ padding: "0 24px 16px" }}>
+        <div style={{ padding: narrow ? "0 16px 12px" : "0 24px 16px" }}>
           <div
             style={{
               fontFamily: fonts.body,
@@ -76,7 +91,7 @@ export function PartnerView({
               display: "block",
               width: "100%",
               textAlign: "left",
-              padding: "14px 24px",
+              padding: narrow ? "12px 16px" : "14px 24px",
               border: "none",
               background: selectedId === s.id ? palette.bg : "transparent",
               borderLeft: selectedId === s.id ? `3px solid ${palette.accent}` : `3px solid transparent`,
@@ -85,8 +100,8 @@ export function PartnerView({
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 500, color: palette.ink, marginBottom: 4 }}>
-              {s.projectDescription.slice(0, 55)}
-              {s.projectDescription.length > 55 ? "…" : ""}
+              {s.projectDescription.slice(0, narrow ? 42 : 55)}
+              {s.projectDescription.length > (narrow ? 42 : 55) ? "…" : ""}
             </div>
             <div style={{ fontSize: 11, color: palette.inkFaint, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span>{s.quotes.length} quotes</span>
@@ -108,14 +123,24 @@ export function PartnerView({
         ))}
       </aside>
       {selected ? (
-        <ReviewPanel
-          key={selected.id}
-          submission={selected}
-          onUpdate={(updated) => {
-            setSubmissions((subs) => subs.map((x) => (x.id === updated.id ? updated : x)));
-          }}
-          onApproved={onApproved}
-        />
+        <div
+          style={
+            narrow
+              ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }
+              : { minHeight: 0, overflow: "hidden" }
+          }
+        >
+          <ReviewPanel
+            key={selected.id}
+            compact={narrow}
+            submission={selected}
+            onUpdate={(updated) => {
+              setSubmissions((subs) => subs.map((x) => (x.id === updated.id ? updated : x)));
+            }}
+            onPersistSubmission={onPersistSubmission}
+            onApproved={onApproved}
+          />
+        </div>
       ) : null}
     </div>
   );

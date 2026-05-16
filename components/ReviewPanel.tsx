@@ -11,11 +11,16 @@ import { Pill } from "@/components/Pill";
 export function ReviewPanel({
   submission,
   onUpdate,
+  onPersistSubmission,
   onApproved,
+  compact = false,
 }: {
   submission: Submission;
   onUpdate: (s: Submission) => void;
+  onPersistSubmission: (s: Submission) => Promise<Submission>;
   onApproved: () => void;
+  /** Narrow / mobile layout */
+  compact?: boolean;
 }) {
   const [notes, setNotes] = useState(submission.partnerNotes || "");
   const [tab, setTab] = useState<"analysis" | "source" | "notes">("analysis");
@@ -36,22 +41,55 @@ export function ReviewPanel({
     prev.current = { id: submission.id, status: submission.status };
   }, [submission.id, submission.status, submission.aiAnalysis]);
 
-  const approve = () => {
-    onUpdate({ ...submission, partnerNotes: notes, status: "reviewed" });
-    toast.success("Sent to customer", {
-      description: "Switch to Customer view to preview the final report the homeowner sees.",
-      duration: 9000,
-    });
-    onApproved();
+  const saveDraft = async () => {
+    if (!canPersist) return;
+    const updated = { ...submission, partnerNotes: notes };
+    onUpdate(updated);
+    try {
+      await onPersistSubmission(updated);
+      toast.success("Draft saved");
+    } catch (e) {
+      toast.error("Could not save draft", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    }
+  };
+
+  const approve = async () => {
+    if (!canPersist) return;
+    const updated = { ...submission, partnerNotes: notes, status: "reviewed" as const };
+    onUpdate(updated);
+    try {
+      await onPersistSubmission(updated);
+      toast.success("Sent to customer", {
+        description: "Switch to Customer view to preview the final report the homeowner sees.",
+        duration: 9000,
+      });
+      onApproved();
+    } catch (e) {
+      toast.error("Could not approve", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    }
   };
 
   const ai = submission.aiAnalysis;
+  const canPersist = !submission.id.startsWith("temp_");
 
   return (
-    <main style={{ padding: 36, background: palette.bg, overflow: "auto" }}>
-      <div style={{ maxWidth: 920 }}>
+    <main
+      style={{
+        padding: compact ? 16 : 36,
+        background: palette.bg,
+        overflow: "auto",
+        flex: compact ? 1 : undefined,
+        minHeight: compact ? 0 : undefined,
+        WebkitOverflowScrolling: "touch",
+      }}
+    >
+      <div style={{ maxWidth: 920, margin: compact ? "0 auto" : undefined, width: "100%" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div
               style={{
                 fontFamily: fonts.body,
@@ -67,12 +105,13 @@ export function ReviewPanel({
             <h1
               style={{
                 fontFamily: fonts.display,
-                fontSize: 28,
+                fontSize: compact ? 22 : 28,
                 fontWeight: 400,
                 color: palette.ink,
                 margin: 0,
                 letterSpacing: -0.3,
                 lineHeight: 1.3,
+                wordBreak: "break-word",
               }}
             >
               {submission.projectDescription}
@@ -83,17 +122,20 @@ export function ReviewPanel({
         <div
           style={{
             display: "flex",
-            gap: 4,
-            marginTop: 28,
+            gap: compact ? 2 : 4,
+            marginTop: compact ? 20 : 28,
             marginBottom: 24,
             borderBottom: `1px solid ${palette.line}`,
+            flexWrap: "wrap",
+            overflowX: compact ? "auto" : undefined,
+            WebkitOverflowScrolling: "touch",
           }}
         >
           {(
             [
-              ["analysis", "AI Analysis"],
-              ["source", "Source quotes"],
-              ["notes", "Reviewer notes"],
+              ["analysis", compact ? "AI" : "AI Analysis"],
+              ["source", compact ? "Source" : "Source quotes"],
+              ["notes", compact ? "Notes" : "Reviewer notes"],
             ] as const
           ).map(([k, label]) => (
             <button
@@ -103,15 +145,16 @@ export function ReviewPanel({
               style={{
                 background: "none",
                 border: "none",
-                padding: "12px 18px",
+                padding: compact ? "10px 12px" : "12px 18px",
                 fontFamily: fonts.body,
-                fontSize: 13,
+                fontSize: compact ? 12 : 13,
                 fontWeight: 500,
                 color: tab === k ? palette.ink : palette.inkFaint,
                 borderBottom: tab === k ? `2px solid ${palette.accent}` : "2px solid transparent",
                 marginBottom: -1,
                 cursor: "pointer",
                 letterSpacing: 0.2,
+                flexShrink: 0,
               }}
             >
               {label}
@@ -147,7 +190,7 @@ export function ReviewPanel({
                 key={i}
                 style={{
                   background: palette.card,
-                  padding: 24,
+                  padding: compact ? 16 : 24,
                   borderRadius: 4,
                   border: `1px solid ${palette.line}`,
                   marginBottom: 16,
@@ -157,8 +200,22 @@ export function ReviewPanel({
                   {i + 1}. {q.builder}
                 </h4>
                 {q.pdfFileName ? (
-                  <div style={{ marginBottom: 12 }}>
+                  <div style={{ marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     <Pill tone="accent">PDF · {q.pdfFileName}</Pill>
+                    <a
+                      href={`/api/submissions/${submission.id}/pdf/${i}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontFamily: fonts.body,
+                        fontSize: 13,
+                        fontWeight: 500,
+                        color: palette.accent,
+                        textDecoration: "none",
+                      }}
+                    >
+                      View PDF
+                    </a>
                   </div>
                 ) : null}
                 <pre
@@ -197,7 +254,7 @@ export function ReviewPanel({
                 Add your professional notes below, then approve to send this package to the customer.
               </div>
             ) : null}
-            <div style={{ background: palette.card, padding: 24, borderRadius: 4, border: `1px solid ${palette.line}` }}>
+            <div style={{ background: palette.card, padding: compact ? 16 : 24, borderRadius: 4, border: `1px solid ${palette.line}` }}>
               <label
                 style={{
                   display: "block",
@@ -230,11 +287,21 @@ export function ReviewPanel({
                   lineHeight: 1.6,
                 }}
               />
-              <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "flex-end" }}>
-                <Button variant="ghost" onClick={() => onUpdate({ ...submission, partnerNotes: notes })}>
+              <div style={{ marginTop: 16, display: "flex", gap: 12, justifyContent: "flex-end", flexDirection: compact ? "column" : "row", flexWrap: "wrap" }}>
+                <Button
+                  variant="ghost"
+                  onClick={() => void saveDraft()}
+                  disabled={!canPersist}
+                  style={compact ? { width: "100%" } : undefined}
+                >
                   Save draft
                 </Button>
-                <Button variant="accent" onClick={approve} disabled={!notes.trim() || !ai}>
+                <Button
+                  variant="accent"
+                  onClick={() => void approve()}
+                  disabled={!canPersist || !notes.trim() || !ai}
+                  style={compact ? { width: "100%" } : undefined}
+                >
                   Approve & send to customer
                 </Button>
               </div>
